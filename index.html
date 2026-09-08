@@ -154,7 +154,7 @@
 
         .toolbar {
             display: grid;
-            grid-template-columns: minmax(220px, 1fr) 190px 190px 190px;
+            grid-template-columns: minmax(220px, 1fr) 190px 190px 190px 190px;
             gap: 12px;
             margin-bottom: 28px;
         }
@@ -315,6 +315,26 @@
             font-size: 17px;
             font-weight: 700;
             line-height: 1.7;
+        }
+
+        .stages-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 4px;
+            margin-bottom: 6px;
+        }
+
+        .stage-tag {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 4px;
+            background: var(--soft);
+            border: 1px solid var(--accent);
+            color: var(--accent-dark);
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.6;
         }
 
         .product-meta {
@@ -1334,6 +1354,18 @@
                 <option>وش</option>
                 <option>صندل</option>
             </select>
+            <select class="control" id="stageFilter" aria-label="تصفية حسب المراحل">
+                <option value="">كل المراحل</option>
+                <option>صيدلية</option>
+                <option>بيبي</option>
+                <option>أولادي</option>
+                <option>بناتي</option>
+                <option>شبابي</option>
+                <option>حريمي</option>
+                <option>رجالي</option>
+                <option>مقاسات خاصة</option>
+                <option>عروض البيع</option>
+            </select>
             <select class="control" id="sort" aria-label="ترتيب المنتجات">
                 <option value="newest">الأحدث أولًا</option>
                 <option value="price-low">السعر: الأقل أولًا</option>
@@ -1533,6 +1565,7 @@
         const searchInput = document.getElementById('search');
         const categorySelect = document.getElementById('category');
         const productTypeSelect = document.getElementById('productType');
+        const stageFilter = document.getElementById('stageFilter');
         const sortSelect = document.getElementById('sort');
         const count = document.getElementById('count');
         const onlineCount = document.getElementById('onlineCount');
@@ -1677,9 +1710,16 @@
             const inCart = cartQuantity(product.id);
             const unavailable = stock === 0 || inCart >= stock;
 
+            // عرض المراحل
+            const stagesHtml = (product.stages || []).length > 0 ?
+                '<div class="stages-container">' +
+                (product.stages || []).map(s => '<span class="stage-tag">🏷️ ' + escapeHtml(s) + '</span>').join(' ') +
+                '</div>' :
+                '';
+
             let buttonText = stock === 0 ? 'غير متوفر' :
                 inCart >= stock ? 'اكتملت الكمية المتاحة' :
-                    'إضافة إلى السلة';
+                'إضافة إلى السلة';
 
             let buttonClass = 'add-order';
             if (stock === 0 || inCart >= stock) buttonClass += ' disabled';
@@ -1694,6 +1734,7 @@
                     </div>
                     <div class="product-body">
                         <h2 class="product-name">${escapeHtml(product.name)}</h2>
+                        ${stagesHtml}
                         <p class="description">${escapeHtml(product.description || 'منتج متاح للبيع بالجملة.')}</p>
                         <div class="product-meta">
                             <span class="price">${formatPrice(product.price)}</span>
@@ -1716,11 +1757,14 @@
         // ============================================================
         function render() {
             const query = searchInput.value.trim().toLocaleLowerCase('ar');
+            const stageFilterValue = stageFilter.value;
+
             let visible = products.filter(product => {
                 const matchCategory = !categorySelect.value || product.category === categorySelect.value;
                 const matchType = !productTypeSelect.value || product.product_type === productTypeSelect.value;
                 const matchSearch = !query || product.name.toLocaleLowerCase('ar').includes(query);
-                return matchCategory && matchType && matchSearch;
+                const matchStage = !stageFilterValue || (product.stages && product.stages.includes(stageFilterValue));
+                return matchCategory && matchType && matchSearch && matchStage;
             });
 
             if (sortSelect.value === 'price-low') visible.sort((a, b) => Number(a.price) - Number(b.price));
@@ -1762,7 +1806,7 @@
                 const { data, error } = await supabaseClient
                     .from('products')
                     .select(
-                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, product_images(image_path, sort_order)'
+                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, stages, product_images(image_path, sort_order)'
                     )
                     .eq('is_active', true)
                     .order('created_at', { ascending: false });
@@ -1771,6 +1815,7 @@
 
                 products = (data || []).map(product => ({
                     ...product,
+                    stages: product.stages || [],
                     images: (product.product_images || []).sort((a, b) => a.sort_order - b.sort_order)
                 }));
 
@@ -2098,9 +2143,8 @@
                 throw itemsError;
             }
 
-            // 4. خصم المخزون (Atomic - يتم في Supabase)
+            // 4. خصم المخزون
             for (const item of orderItems) {
-                // استخدام RPC أو تحديث مباشر مع التحقق من الكمية
                 const { data: productData, error: fetchError } = await supabaseClient
                     .from('products')
                     .select('stock_quantity')
@@ -2115,12 +2159,10 @@
                 const { error: updateError } = await supabaseClient
                     .from('products')
                     .update({ stock_quantity: newStock })
-                    .eq('id', item.product.id)
-                    .eq('stock_quantity', currentStock); // شرط إضافي لمنع التحديث المتزامن
+                    .eq('id', item.product.id);
 
                 if (updateError) {
                     console.warn(`⚠️ Failed to update stock for product ${item.product.id}:`, updateError);
-                    // لا نرمي خطأ هنا، نستمر
                 }
             }
 
@@ -2129,7 +2171,7 @@
                 const { data: updatedProduct, error: fetchError } = await supabaseClient
                     .from('products')
                     .select(
-                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, product_images(image_path, sort_order)'
+                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, stages, product_images(image_path, sort_order)'
                     )
                     .eq('id', item.product.id)
                     .single();
@@ -2139,13 +2181,13 @@
                     if (index !== -1) {
                         products[index] = {
                             ...updatedProduct,
+                            stages: updatedProduct.stages || [],
                             images: (updatedProduct.product_images || []).sort((a, b) => a.sort_order - b.sort_order)
                         };
                     }
                 }
             }
 
-            // عرض تنبيه للمستخدمين الآخرين
             showStockAlert(`🔥 تم حجز ${orderItems.reduce((sum, i) => sum + i.quantity, 0)} دستة من المنتجات`, 'warning');
 
             return order;
@@ -2232,7 +2274,6 @@
                 document.getElementById('orderFormView').style.display = 'none';
                 document.getElementById('invoiceView').classList.add('is-visible');
 
-                // إظهار تنبيه نجاح
                 showStockAlert('✅ تم إرسال الطلب بنجاح!', 'success');
 
             } catch (saveError) {
@@ -2324,7 +2365,7 @@
             const sizes = getCategorySizes(product.category);
             document.getElementById('editRangeNote').textContent =
                 sizes ? 'المقاسات: ' + sizes[0] + ' - ' + sizes[1] :
-                    'المقاسات القديمة: ' + product.size_from + ' - ' + product.size_to;
+                'المقاسات القديمة: ' + product.size_from + ' - ' + product.size_to;
 
             document.getElementById('editStock').value = product.stock_quantity || 0;
             document.getElementById('editDescription').value = product.description || '';
@@ -2396,7 +2437,7 @@
                     .update(values)
                     .eq('id', editingProductId)
                     .select(
-                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, product_images(image_path, sort_order)'
+                        'id, name, category, product_type, origin, price, size_from, size_to, description, stock_quantity, is_active, created_at, stages, product_images(image_path, sort_order)'
                     )
                     .single();
 
@@ -2406,6 +2447,7 @@
                 if (index !== -1) {
                     products[index] = {
                         ...data,
+                        stages: data.stages || [],
                         images: (data.product_images || []).sort((a, b) => a.sort_order - b.sort_order)
                     };
                 }
@@ -2431,13 +2473,11 @@
         function startRealtimeSubscriptions() {
             if (!supabaseClient) return;
 
-            // إلغاء القديمة
             subscriptions.forEach(channel => {
-                try { supabaseClient.removeChannel(channel); } catch (e) { }
+                try { supabaseClient.removeChannel(channel); } catch (e) {}
             });
             subscriptions = [];
 
-            // 1. منتجات
             const productsChannel = supabaseClient
                 .channel('products-changes')
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, async (payload) => {
@@ -2447,7 +2487,6 @@
                 .subscribe();
             subscriptions.push(productsChannel);
 
-            // 2. صور
             const imagesChannel = supabaseClient
                 .channel('images-changes')
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'product_images' }, async () => {
@@ -2457,7 +2496,6 @@
                 .subscribe();
             subscriptions.push(imagesChannel);
 
-            // 3. طلبات (للمخزون)
             const ordersChannel = supabaseClient
                 .channel('orders-changes')
                 .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, async (payload) => {
@@ -2507,34 +2545,26 @@
         async function init() {
             console.log('🚀 Initializing...');
 
-            // Load customer data from localStorage
             loadCustomerData();
 
-            // Load products
             await loadProducts();
 
-            // Start presence
             initializePresence();
 
-            // Start realtime subscriptions
             startRealtimeSubscriptions();
 
-            // Monitor connection
             monitorConnection();
 
-            // Event listeners for customer data save
             ['customerName', 'customerPhone', 'customerCompany', 'customerGovernorate', 'customerAddress', 'customerNotes']
-                .forEach(id => {
-                    document.getElementById(id).addEventListener('input', saveCustomerData);
-                });
+            .forEach(id => {
+                document.getElementById(id).addEventListener('input', saveCustomerData);
+            });
 
-            // Search/filter
-            [searchInput, categorySelect, productTypeSelect, sortSelect].forEach(control => {
+            [searchInput, categorySelect, productTypeSelect, stageFilter, sortSelect].forEach(control => {
                 control.addEventListener('input', render);
                 control.addEventListener('change', render);
             });
 
-            // Refresh button
             document.getElementById('refreshBtn').addEventListener('click', async () => {
                 showStockAlert('🔄 جاري تحديث البيانات...', 'info');
                 await loadProducts();
@@ -2544,7 +2574,6 @@
             console.log('✅ Initialization complete');
         }
 
-        // Start
         init().catch(error => {
             console.error('❌ Init failed:', error);
             showError();
@@ -2555,10 +2584,10 @@
         // ============================================================
         window.addEventListener('beforeunload', () => {
             subscriptions.forEach(channel => {
-                try { supabaseClient.removeChannel(channel); } catch (e) { }
+                try { supabaseClient.removeChannel(channel); } catch (e) {}
             });
             if (presenceChannel) {
-                try { presenceChannel.unsubscribe(); } catch (e) { }
+                try { presenceChannel.unsubscribe(); } catch (e) {}
             }
             console.log('🔄 Cleanup complete');
         });
